@@ -125,6 +125,7 @@ struct DraggableGridItem: View {
         // Container that clips AFTER all crop transforms
         Rectangle()
             .fill(Color.clear)
+            .frame(width: size.width, height: size.height)
             .overlay {
                 imageContent
                     .frame(width: size.width, height: size.height)
@@ -136,6 +137,7 @@ struct DraggableGridItem: View {
                     ))
             }
             .clipShape(Rectangle()) // Clips AFTER crop transforms
+            .contentShape(Rectangle()) // Ensures hit testing matches visual bounds
     }
 
     // Edit mode content with tap gesture

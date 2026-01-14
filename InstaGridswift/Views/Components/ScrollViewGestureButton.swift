@@ -112,9 +112,11 @@ struct ScrollViewGestureButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
             .brightness(configuration.isPressed ? -0.05 : 0)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-            .onChange(of: configuration.isPressed) { _, isPressed in
-                isPressing = isPressed
-                if isPressed {
+            .onChange(of: configuration.isPressed) { oldValue, newValue in
+                // Guard against duplicate calls
+                guard oldValue != newValue else { return }
+                isPressing = newValue
+                if newValue {
                     onPressStart()
                 } else {
                     onPressEnd()

@@ -29,29 +29,30 @@ struct PlanEditorView: View {
 
             ZStack {
                 ScrollView {
-                    Group {
-                        if plan.images.isEmpty {
-                            emptyState
-                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                        } else {
-                            gridContent(itemSize: itemSize, containerWidth: geometry.size.width)
-                                .transition(.opacity)
+                    ZStack {
+                        // Background tap area to dismiss overlay (behind grid content)
+                        if showingOverlayForID != nil {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    withAnimation(.snappySpring) {
+                                        showingOverlayForID = nil
+                                    }
+                                    HapticService.impact(.light)
+                                }
                         }
-                    }
-                    .animation(.smoothSpring, value: plan.images.isEmpty)
-                }
 
-                // Full-screen dismissal layer when overlay is showing
-                if showingOverlayForID != nil {
-                    Color.black.opacity(0.01) // Nearly invisible but tappable
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            withAnimation(.snappySpring) {
-                                showingOverlayForID = nil
+                        Group {
+                            if plan.images.isEmpty {
+                                emptyState
+                                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                            } else {
+                                gridContent(itemSize: itemSize, containerWidth: geometry.size.width)
+                                    .transition(.opacity)
                             }
-                            HapticService.impact(.light)
                         }
-                        .zIndex(50) // Below overlay (100) but above grid
+                        .animation(.smoothSpring, value: plan.images.isEmpty)
+                    }
                 }
 
                 // Dragged item overlay - always on top
@@ -120,15 +121,15 @@ struct PlanEditorView: View {
         )
 
         LazyVGrid(columns: columns, spacing: GridConstants.spacing) {
-            ForEach(plan.sortedImages) { image in
-                let imageIndex = plan.sortedImages.firstIndex(where: { $0.id == image.id })
+            // Use enumerated() for stable index-value pairs
+            ForEach(Array(plan.sortedImages.enumerated()), id: \.element.id) { index, image in
                 DraggableGridItem(
                     image: image,
                     size: itemSize,
                     isSelected: selectedImageIDs.contains(image.id),
                     editMode: editMode,
                     isDragging: draggedImageID == image.id,
-                    isDropTarget: dragTargetIndex == imageIndex && draggedImageID != nil && draggedImageID != image.id,
+                    isDropTarget: dragTargetIndex == index && draggedImageID != nil && draggedImageID != image.id,
                     aspectRatio: plan.aspectRatio,
                     showingOverlayForID: $showingOverlayForID,
                     onTap: { handleTap(image) },
@@ -138,7 +139,7 @@ struct PlanEditorView: View {
                     onDragStarted: { startLocation in
                         showingOverlayForID = nil
                         draggedImageID = image.id
-                        dragSourceIndex = plan.sortedImages.firstIndex(where: { $0.id == image.id })
+                        dragSourceIndex = index
                         dragStartLocation = startLocation
                     },
                     onDragChanged: { translation in
@@ -151,7 +152,6 @@ struct PlanEditorView: View {
                         dragStartLocation = .zero
                     }
                 )
-                .id(image.id)
             }
         }
         .padding(GridConstants.spacing)
@@ -341,19 +341,25 @@ struct PlanEditorView: View {
     private func handleDrag(_ image: PlanImage, translation: CGSize, itemSize: CGSize) {
         guard draggedImageID != nil, let sourceIndex = dragSourceIndex else { return }
 
-        let sourceRow = sourceIndex / GridConstants.columns
-        let sourceCol = sourceIndex % GridConstants.columns
-
         let cellWidth = itemSize.width + GridConstants.spacing
         let cellHeight = itemSize.height + GridConstants.spacing
+
+        // Calculate cell offset from translation
+        // Since we now start from cell CENTER, simple rounding works correctly
         let colOffset = Int(round(translation.width / cellWidth))
         let rowOffset = Int(round(translation.height / cellHeight))
 
+        let sourceRow = sourceIndex / GridConstants.columns
+        let sourceCol = sourceIndex % GridConstants.columns
+
         let newCol = max(0, min(GridConstants.columns - 1, sourceCol + colOffset))
         let newRow = max(0, sourceRow + rowOffset)
-        let newIndex = min(plan.sortedImages.count - 1, max(0, newRow * GridConstants.columns + newCol))
 
-        // Only update target index for visual feedback - don't move the array yet
+        let totalImages = plan.sortedImages.count
+        let maxIndex = max(0, totalImages - 1)
+        let newIndex = min(maxIndex, max(0, newRow * GridConstants.columns + newCol))
+
+        // Only update target index for visual feedback
         if newIndex != dragTargetIndex {
             dragTargetIndex = newIndex
             HapticService.selection()

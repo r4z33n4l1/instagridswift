@@ -15,6 +15,7 @@ struct CachedAsyncImage: View {
     @State private var loadedImage: UIImage?
     @State private var isLoading = false
     @State private var loadFailed = false
+    @State private var hasLoaded = false
 
     init(url: URL?, cacheKey: String, useThumbnail: Bool = true) {
         self.url = url
@@ -48,17 +49,19 @@ struct CachedAsyncImage: View {
                     .transition(.opacity.animation(.easeIn(duration: 0.2)))
             }
         }
-        .animation(.easeIn(duration: 0.2), value: loadedImage != nil)
+        .animation(.easeIn(duration: 0.2), value: hasLoaded)
     }
 
     private func loadImage() {
         // Check cache first
         if useThumbnail, let cached = ImageCache.shared.thumbnail(for: cacheKey) {
             loadedImage = cached
+            hasLoaded = true
             return
         }
         if !useThumbnail, let cached = ImageCache.shared.fullImage(for: cacheKey) {
             loadedImage = cached
+            hasLoaded = true
             return
         }
 
@@ -85,12 +88,14 @@ struct CachedAsyncImage: View {
                     ImageCache.shared.setThumbnail(thumbnail, for: cacheKey)
                     await MainActor.run {
                         loadedImage = thumbnail
+                        hasLoaded = true
                         isLoading = false
                     }
                 } else {
                     ImageCache.shared.setFullImage(uiImage, for: cacheKey)
                     await MainActor.run {
                         loadedImage = uiImage
+                        hasLoaded = true
                         isLoading = false
                     }
                 }

@@ -17,36 +17,27 @@ struct PlanEditorView: View {
     @State private var showHiddenSheet = false
     @State private var imageToEdit: PlanImage?
 
-    // Drag state
+    // Drag state for smooth custom drag/drop
     @State private var draggedSourceIndex: Int?
     @State private var proposedDropIndex: Int?
     @State private var currentItemSize: CGSize = .zero
-    @State private var dragTranslation: CGSize = .zero
+    @State private var globalDragPosition: CGPoint = .zero
 
     var body: some View {
         GeometryReader { geometry in
             let itemSize = calculateItemSize(for: geometry.size.width)
 
-            ZStack {
-                ScrollView {
-                    Group {
-                        if plan.images.isEmpty {
-                            emptyState
-                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                        } else {
-                            gridContent(itemSize: itemSize, geometry: geometry)
-                                .transition(.opacity)
-                        }
+            ScrollView {
+                Group {
+                    if plan.images.isEmpty {
+                        emptyState
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    } else {
+                        gridContent(itemSize: itemSize, geometry: geometry)
+                            .transition(.opacity)
                     }
-                    .animation(.smoothSpring, value: plan.images.isEmpty)
                 }
-                .scrollDisabled(draggedSourceIndex != nil)  // Disable scroll during drag
-
-                // Floating drag preview
-                if let sourceIndex = draggedSourceIndex,
-                   sourceIndex < plan.sortedImages.count {
-                    dragPreview(for: plan.sortedImages[sourceIndex], itemSize: itemSize)
-                }
+                .animation(.smoothSpring, value: plan.images.isEmpty)
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -113,18 +104,29 @@ struct PlanEditorView: View {
                 isSelected: selectedImageIDs.contains(image.id),
                 editMode: editMode,
                 isDragging: draggedSourceIndex == index,
+                isAnyDragging: draggedSourceIndex != nil,
                 aspectRatio: plan.aspectRatio,
                 index: index,
                 onTap: { handleTap(image) },
                 onDelete: { deleteImage(image) },
                 onHide: { hideImage(image) },
                 onEditCrop: { imageToEdit = image },
-                onDragChanged: { sourceIndex, translation in
-                    dragTranslation = translation
-                    handleDragChanged(sourceIndex: sourceIndex, translation: translation, itemSize: itemSize)
+                onDragStarted: {
+                    draggedSourceIndex = index
                 },
-                onDragEnded: {
-                    handleDragEnded()
+                onDragChanged: { translation in
+                    updateDropIndex(for: translation, sourceIndex: index, itemSize: itemSize, geometry: geometry)
+                },
+                onDragEnded: { _ in
+                    if let sourceIndex = draggedSourceIndex,
+                       let targetIndex = proposedDropIndex,
+                       sourceIndex != targetIndex {
+                        performReorder(from: sourceIndex, to: targetIndex)
+                    } else {
+                        // Reset state if no valid drop
+                        draggedSourceIndex = nil
+                        proposedDropIndex = nil
+                    }
                 }
             )
         }
@@ -136,87 +138,44 @@ struct PlanEditorView: View {
         }
     }
 
-    @ViewBuilder
-    private func dragPreview(for image: PlanImage, itemSize: CGSize) -> some View {
-        // Calculate the original position of the dragged cell
-        guard let sourceIndex = draggedSourceIndex else { return AnyView(EmptyView()) }
-
-        let cellWidth = itemSize.width + GridConstants.spacing
-        let cellHeight = itemSize.height + GridConstants.spacing
-        let sourceCol = sourceIndex % GridConstants.columns
-        let sourceRow = sourceIndex / GridConstants.columns
-
-        // Original center position (accounting for grid padding)
-        let originalX = CGFloat(sourceCol) * cellWidth + itemSize.width / 2 + GridConstants.spacing
-        let originalY = CGFloat(sourceRow) * cellHeight + itemSize.height / 2 + GridConstants.spacing
-
-        // Current position = original + translation
-        let currentX = originalX + dragTranslation.width
-        let currentY = originalY + dragTranslation.height
-
-        return AnyView(
-            CachedAsyncImage(
-                url: image.fileURL,
-                cacheKey: image.localPath,
-                useThumbnail: true
-            )
-            .aspectRatio(contentMode: .fill)
-            .frame(width: itemSize.width, height: itemSize.height)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .scaleEffect(1.05)
-            .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
-            .position(x: currentX, y: currentY)
-            .allowsHitTesting(false)
-        )
-    }
-
-    private func handleDragChanged(sourceIndex: Int, translation: CGSize, itemSize: CGSize) {
-        guard !editMode else { return }
-
-        // Set source index on first drag update
-        if draggedSourceIndex == nil {
-            draggedSourceIndex = sourceIndex
-            print("🚀 DRAG started: sourceIndex=\(sourceIndex)")
-        }
-
-        // Calculate source cell's original position
-        let cellWidth = itemSize.width + GridConstants.spacing
-        let cellHeight = itemSize.height + GridConstants.spacing
-        let sourceCol = sourceIndex % GridConstants.columns
-        let sourceRow = sourceIndex / GridConstants.columns
-        let sourceCenterX = CGFloat(sourceCol) * cellWidth + itemSize.width / 2 + GridConstants.spacing
-        let sourceCenterY = CGFloat(sourceRow) * cellHeight + itemSize.height / 2 + GridConstants.spacing
-
-        // Calculate current drag position (source center + translation)
-        let currentX = sourceCenterX + translation.width
-        let currentY = sourceCenterY + translation.height
-
-        // Calculate target index from current position
-        let col = max(0, min(GridConstants.columns - 1, Int(currentX / cellWidth)))
-        let row = max(0, Int(currentY / cellHeight))
-        let newIndex = min(plan.sortedImages.count - 1, max(0, row * GridConstants.columns + col))
-
-        if newIndex != proposedDropIndex {
-            print("📍 Target: \(newIndex) (from pos \(Int(currentX)),\(Int(currentY)))")
-            proposedDropIndex = newIndex
+    private func updateDropIndex(for translation: CGSize, sourceIndex: Int, itemSize: CGSize, geometry: GeometryProxy) {
+        // Calculate the grid position based on translation
+        let gridSpacing = GridConstants.spacing
+        let columns = GridConstants.columns
+        
+        // Get the source position in the grid
+        let sourceRow = sourceIndex / columns
+        let sourceCol = sourceIndex % columns
+        
+        // Calculate the source position in points
+        let sourceX = CGFloat(sourceCol) * (itemSize.width + gridSpacing) + gridSpacing
+        let sourceY = CGFloat(sourceRow) * (itemSize.height + gridSpacing) + gridSpacing
+        
+        // Add the translation to get the current position
+        let currentX = sourceX + translation.width
+        let currentY = sourceY + translation.height
+        
+        // Convert back to grid coordinates
+        let cellWidth = itemSize.width + gridSpacing
+        let cellHeight = itemSize.height + gridSpacing
+        
+        let targetCol = max(0, min(columns - 1, Int((currentX - gridSpacing + cellWidth/2) / cellWidth)))
+        let targetRow = max(0, Int((currentY - gridSpacing + cellHeight/2) / cellHeight))
+        let targetIndex = min(plan.sortedImages.count - 1, max(0, targetRow * columns + targetCol))
+        
+        if targetIndex != proposedDropIndex {
+            proposedDropIndex = targetIndex
             HapticService.selection()
         }
     }
 
-    private func handleDragEnded() {
-        print("🔚 DRAG ended: src=\(draggedSourceIndex ?? -1), tgt=\(proposedDropIndex ?? -1)")
-
-        guard let sourceIndex = draggedSourceIndex,
-              let targetIndex = proposedDropIndex,
-              sourceIndex != targetIndex else {
-            // Reset state without reordering
+    private func performReorder(from sourceIndex: Int, to targetIndex: Int) {
+        guard sourceIndex != targetIndex else {
             draggedSourceIndex = nil
             proposedDropIndex = nil
-            dragTranslation = .zero
             return
         }
 
-        // Perform reorder
         var images = plan.sortedImages
         let movedImage = images.remove(at: sourceIndex)
         images.insert(movedImage, at: targetIndex)
@@ -227,13 +186,11 @@ struct PlanEditorView: View {
 
         try? modelContext.save()
         plan.updatedAt = Date()
-        print("📍 REORDER: \(sourceIndex) -> \(targetIndex) complete")
         HapticService.notification(.success)
 
         // Reset state
         draggedSourceIndex = nil
         proposedDropIndex = nil
-        dragTranslation = .zero
     }
 
     @ViewBuilder

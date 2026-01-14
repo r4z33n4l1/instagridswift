@@ -4,13 +4,15 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct PhotoGridCell: View {
     let image: PlanImage
     let size: CGSize
     let isSelected: Bool
     let editMode: Bool
-    let isDragging: Bool
+    let isDragging: Bool  // Is THIS cell being dragged
+    let isAnyDragging: Bool  // Is ANY cell being dragged
     let aspectRatio: AspectRatio
     let index: Int
 
@@ -18,16 +20,14 @@ struct PhotoGridCell: View {
     let onDelete: () -> Void
     let onHide: () -> Void
     let onEditCrop: () -> Void
-    let onDragChanged: (Int, CGSize) -> Void  // index, translation
-    let onDragEnded: () -> Void
+    let onDragStarted: () -> Void
+    let onDragChanged: (CGSize) -> Void
+    let onDragEnded: (CGSize) -> Void
 
-    @GestureState private var dragOffset: CGSize = .zero
-    @State private var isDragActive = false
+    @State private var dragOffset: CGSize = .zero
+    @State private var isLifted: Bool = false
 
     var body: some View {
-        // Only log when dragging state changes (reduce spam)
-        let _ = isDragging ? print("📷 Cell[\(image.order)] dragging") : ()
-
         ZStack(alignment: .topTrailing) {
             if editMode {
                 editModeContent
@@ -45,79 +45,49 @@ struct PhotoGridCell: View {
         }
         .frame(width: size.width, height: size.height)
         .clipShape(Rectangle())
-        .opacity(isDragging ? 0.3 : 1.0)
-        .animation(.easeOut(duration: 0.15), value: isDragging)
+        .offset(dragOffset)
+        .scaleEffect(isLifted ? 1.05 : 1.0)
+        .opacity(isDragging && !isLifted ? 0.3 : 1.0)
+        .shadow(
+            color: .black.opacity(isLifted ? 0.3 : 0),
+            radius: isLifted ? 10 : 0,
+            x: 0,
+            y: isLifted ? 5 : 0
+        )
+        .zIndex(isLifted ? 100 : 0)
+        .animation(.liftSpring, value: isLifted)
+        .animation(.easeInOut(duration: 0.2), value: dragOffset)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Photo \(image.order + 1)")
         .accessibilityHint(editMode ? "Double tap to select" : "Long press for options")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    // Drag gesture for reordering
-    private var dragGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
-            .onChanged { value in
-                switch value {
-                case .second(true, let drag):
-                    if let drag = drag {
-                        if !isDragActive {
-                            isDragActive = true
-                            HapticService.impact(.medium)
-                            print("🚀 DRAG started: index=\(index)")
-                        }
-                        // Pass translation to calculate new position
-                        onDragChanged(index, drag.translation)
-                    }
-                default:
-                    break
-                }
-            }
-            .onEnded { value in
-                if isDragActive {
-                    print("🔚 DRAG ended: index=\(index)")
-                    isDragActive = false
-                    onDragEnded()
-                }
-            }
-    }
-
-    // Normal content with context menu
+    // Normal content with smooth drag support
     @ViewBuilder
     private var normalContent: some View {
-        imageContainer
-            .contentShape(Rectangle())
-            .gesture(dragGesture)
-            .contextMenu {
-                // Share action
-                if let url = image.fileURL {
-                    ShareLink(item: url) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                    }
+        DragGestureView(
+            onDragStarted: {
+                if !isAnyDragging {
+                    HapticService.impact(.medium)
+                    print("🚀 SMOOTH DRAG started: index=\(index)")
+                    onDragStarted()
+                    isLifted = true
                 }
-
-                Button {
-                    onHide()
-                } label: {
-                    Label("Hide", systemImage: "eye.slash")
-                }
-
-                Button {
-                    onEditCrop()
-                } label: {
-                    Label("Crop", systemImage: "crop")
-                }
-
-                Divider()
-
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-            } preview: {
-                ImagePreviewView(image: image)
+            },
+            onDragChanged: { translation in
+                dragOffset = translation
+                onDragChanged(translation)
+            },
+            onDragEnded: { translation in
+                onDragEnded(translation)
+                isLifted = false
+                dragOffset = .zero
             }
+        ) {
+            imageContainer
+                .contentShape(Rectangle())
+        }
     }
 
     // Edit mode content with tap gesture
@@ -198,13 +168,15 @@ struct PhotoGridCell: View {
         isSelected: false,
         editMode: false,
         isDragging: false,
+        isAnyDragging: false,
         aspectRatio: .feedPortrait,
         index: 0,
         onTap: {},
         onDelete: {},
         onHide: {},
         onEditCrop: {},
-        onDragChanged: { _, _ in },  // index, translation
-        onDragEnded: {}
+        onDragStarted: {},
+        onDragChanged: { _ in },
+        onDragEnded: { _ in }
     )
 }

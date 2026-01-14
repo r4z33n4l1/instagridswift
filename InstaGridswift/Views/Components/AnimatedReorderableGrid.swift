@@ -19,10 +19,6 @@ struct AnimatedReorderableGrid<Item: Identifiable, Content: View>: View {
         let gridWidth = calculateGridWidth()
         let gridHeight = calculateGridHeight()
 
-        // Simplified logging
-        let dragID = draggedItemID.map { "\($0)".prefix(4) } ?? "nil"
-        let _ = print("🔲 Grid: \(items.count) items, drag:\(dragID), src:\(draggedSourceIndex ?? -1), drop:\(proposedDropIndex ?? -1)")
-
         ZStack(alignment: .topLeading) {
             // Invisible spacer to establish the grid size
             Color.clear
@@ -30,13 +26,10 @@ struct AnimatedReorderableGrid<Item: Identifiable, Content: View>: View {
 
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 let position = calculatePosition(for: index)
-                let isDragged = item.id == draggedItemID
 
                 content(item, index)
                     .frame(width: itemSize.width, height: itemSize.height)
                     .offset(x: position.x, y: position.y)
-                    .opacity(isDragged ? 0.3 : 1.0)
-                    .zIndex(isDragged ? -1 : 0)
                     .animation(.gapSpring, value: position.x)
                     .animation(.gapSpring, value: position.y)
             }

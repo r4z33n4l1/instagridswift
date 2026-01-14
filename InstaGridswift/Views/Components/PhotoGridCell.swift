@@ -55,22 +55,20 @@ struct PhotoGridCell: View {
             y: isLifted ? 5 : 0
         )
         .zIndex(isLifted ? 100 : 0)
-        .animation(.liftSpring, value: isLifted)
-        .animation(.easeInOut(duration: 0.2), value: dragOffset)
+        .animation(.easeOut(duration: 0.15), value: isLifted)
+        .animation(.easeOut(duration: 0.15), value: dragOffset)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Photo \(image.order + 1)")
         .accessibilityHint(editMode ? "Double tap to select" : "Long press for options")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    // Normal content with smooth drag support
+    // Normal content with smooth drag support and native context menu
     @ViewBuilder
     private var normalContent: some View {
         DragGestureView(
             onDragStarted: {
                 if !isAnyDragging {
-                    HapticService.impact(.medium)
-                    print("🚀 SMOOTH DRAG started: index=\(index)")
                     onDragStarted()
                     isLifted = true
                 }
@@ -83,7 +81,17 @@ struct PhotoGridCell: View {
                 onDragEnded(translation)
                 isLifted = false
                 dragOffset = .zero
-            }
+            },
+            contextMenuConfig: ContextMenuConfig(
+                onHide: onHide,
+                onEditCrop: onEditCrop,
+                onDelete: onDelete,
+                previewProvider: { [image] in
+                    // Create a preview view controller using existing ImagePreviewView
+                    let previewView = ImagePreviewView(image: image)
+                    return UIHostingController(rootView: previewView)
+                }
+            )
         ) {
             imageContainer
                 .contentShape(Rectangle())

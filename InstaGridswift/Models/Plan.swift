@@ -30,15 +30,27 @@ final class Plan {
         set { aspectRatioRaw = newValue.rawValue }
     }
 
+    // Visible images only, sorted by order
     var sortedImages: [PlanImage] {
-        images.sorted { $0.order < $1.order }
+        images.filter { !$0.isHidden }.sorted { $0.order < $1.order }
+    }
+
+    // Hidden images, sorted by when they were hidden (most recent first)
+    var hiddenImages: [PlanImage] {
+        images.filter { $0.isHidden }.sorted { ($0.hiddenAt ?? Date.distantPast) > ($1.hiddenAt ?? Date.distantPast) }
     }
 
     var thumbnailImages: [PlanImage] {
         Array(sortedImages.prefix(9))
     }
 
+    // Count of visible images
     var imageCount: Int {
-        images.count
+        sortedImages.count
+    }
+
+    // Count of hidden images
+    var hiddenImageCount: Int {
+        images.filter { $0.isHidden }.count
     }
 }

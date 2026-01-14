@@ -16,22 +16,50 @@ struct PlanEditorView: View {
     @State private var showImagePicker = false
     @State private var draggedImageID: UUID?
     @State private var dragTargetIndex: Int?
+    @State private var dragSourceIndex: Int?
+    @State private var dragOffset: CGSize = .zero
+    @State private var dragStartLocation: CGPoint = .zero
+    @State private var showingOverlayForID: UUID?
+    @State private var showHiddenSheet = false
+    @State private var imageToEdit: PlanImage?
 
     var body: some View {
         GeometryReader { geometry in
             let itemSize = calculateItemSize(for: geometry.size.width)
 
-            ScrollView {
-                Group {
-                    if plan.images.isEmpty {
-                        emptyState
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    } else {
-                        gridContent(itemSize: itemSize, containerWidth: geometry.size.width)
-                            .transition(.opacity)
+            ZStack {
+                ScrollView {
+                    Group {
+                        if plan.images.isEmpty {
+                            emptyState
+                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        } else {
+                            gridContent(itemSize: itemSize, containerWidth: geometry.size.width)
+                                .transition(.opacity)
+                        }
                     }
+                    .animation(.smoothSpring, value: plan.images.isEmpty)
                 }
-                .animation(.smoothSpring, value: plan.images.isEmpty)
+
+                // Full-screen dismissal layer when overlay is showing
+                if showingOverlayForID != nil {
+                    Color.black.opacity(0.01) // Nearly invisible but tappable
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.snappySpring) {
+                                showingOverlayForID = nil
+                            }
+                            HapticService.impact(.light)
+                        }
+                        .zIndex(50) // Below overlay (100) but above grid
+                }
+
+                // Dragged item overlay - always on top
+                if let draggedID = draggedImageID,
+                   let draggedImage = plan.sortedImages.first(where: { $0.id == draggedID }) {
+                    draggedItemOverlay(image: draggedImage, itemSize: itemSize)
+                        .zIndex(200) // Highest z-index
+                }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -46,8 +74,19 @@ struct PlanEditorView: View {
         .sheet(isPresented: $showImagePicker) {
             ImagePickerView(plan: plan)
         }
+        .sheet(isPresented: $showHiddenSheet) {
+            HiddenImagesSheet(plan: plan)
+        }
+        .sheet(item: $imageToEdit) { image in
+            ImageCropEditorView(image: image, aspectRatio: plan.aspectRatio)
+        }
         .onAppear {
             editedName = plan.name
+        }
+        .onChange(of: editMode) { _, newValue in
+            if newValue {
+                showingOverlayForID = nil
+            }
         }
     }
 
@@ -82,24 +121,72 @@ struct PlanEditorView: View {
 
         LazyVGrid(columns: columns, spacing: GridConstants.spacing) {
             ForEach(plan.sortedImages) { image in
+                let imageIndex = plan.sortedImages.firstIndex(where: { $0.id == image.id })
                 DraggableGridItem(
                     image: image,
                     size: itemSize,
                     isSelected: selectedImageIDs.contains(image.id),
                     editMode: editMode,
                     isDragging: draggedImageID == image.id,
+                    isDropTarget: dragTargetIndex == imageIndex && draggedImageID != nil && draggedImageID != image.id,
+                    aspectRatio: plan.aspectRatio,
+                    showingOverlayForID: $showingOverlayForID,
                     onTap: { handleTap(image) },
                     onDelete: { deleteImage(image) },
-                    onDragStarted: { draggedImageID = image.id },
+                    onHide: { hideImage(image) },
+                    onEditCrop: { imageToEdit = image },
+                    onDragStarted: { startLocation in
+                        showingOverlayForID = nil
+                        draggedImageID = image.id
+                        dragSourceIndex = plan.sortedImages.firstIndex(where: { $0.id == image.id })
+                        dragStartLocation = startLocation
+                    },
                     onDragChanged: { translation in
+                        dragOffset = translation
                         handleDrag(image, translation: translation, itemSize: itemSize)
                     },
-                    onDragEnded: { handleDragEnd() }
+                    onDragEnded: {
+                        handleDragEnd()
+                        dragOffset = .zero
+                        dragStartLocation = .zero
+                    }
                 )
                 .id(image.id)
             }
         }
         .padding(GridConstants.spacing)
+    }
+
+    @ViewBuilder
+    private func draggedItemOverlay(image: PlanImage, itemSize: CGSize) -> some View {
+        // Outer container that clips AFTER all crop transforms
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: itemSize.width, height: itemSize.height)
+            .overlay {
+                CachedAsyncImage(
+                    url: image.fileURL,
+                    cacheKey: image.localPath,
+                    useThumbnail: true
+                )
+                .aspectRatio(contentMode: .fill)
+                .frame(width: itemSize.width, height: itemSize.height)
+                .modifier(CropAppliedModifier(
+                    cropSettings: image.cropSettings(for: plan.aspectRatio),
+                    frameSize: itemSize,
+                    imageWidth: image.width,
+                    imageHeight: image.height
+                ))
+            }
+            .clipShape(Rectangle()) // Clips AFTER crop transforms
+            .scaleEffect(1.10) // Enhanced lift effect (was 1.05)
+            .rotationEffect(.degrees(2)) // Subtle rotation for "picked up" feel
+            .shadow(color: .black.opacity(0.5), radius: 16, x: 0, y: 8)
+            .position(
+                x: dragStartLocation.x + dragOffset.width,
+                y: dragStartLocation.y + dragOffset.height
+            )
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -168,6 +255,26 @@ struct PlanEditorView: View {
         }
         .accessibilityLabel("Aspect ratio: \(plan.aspectRatio.displayName)")
 
+        if plan.hiddenImageCount > 0 {
+            Button {
+                showHiddenSheet = true
+                HapticService.impact(.light)
+            } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "eye.slash")
+
+                    Text("\(plan.hiddenImageCount)")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .padding(4)
+                        .background(Color.danger)
+                        .clipShape(Circle())
+                        .offset(x: 8, y: -8)
+                }
+            }
+            .accessibilityLabel("\(plan.hiddenImageCount) hidden photos")
+        }
+
         if !plan.images.isEmpty {
             Button {
                 HapticService.impact(.light)
@@ -232,31 +339,45 @@ struct PlanEditorView: View {
     }
 
     private func handleDrag(_ image: PlanImage, translation: CGSize, itemSize: CGSize) {
-        guard draggedImageID != nil else { return }
+        guard draggedImageID != nil, let sourceIndex = dragSourceIndex else { return }
 
-        let currentIndex = plan.sortedImages.firstIndex(where: { $0.id == image.id }) ?? 0
-        let currentRow = currentIndex / GridConstants.columns
-        let currentCol = currentIndex % GridConstants.columns
+        let sourceRow = sourceIndex / GridConstants.columns
+        let sourceCol = sourceIndex % GridConstants.columns
 
         let cellWidth = itemSize.width + GridConstants.spacing
         let cellHeight = itemSize.height + GridConstants.spacing
         let colOffset = Int(round(translation.width / cellWidth))
         let rowOffset = Int(round(translation.height / cellHeight))
 
-        let newCol = max(0, min(GridConstants.columns - 1, currentCol + colOffset))
-        let newRow = max(0, currentRow + rowOffset)
-        let newIndex = min(plan.images.count - 1, newRow * GridConstants.columns + newCol)
+        let newCol = max(0, min(GridConstants.columns - 1, sourceCol + colOffset))
+        let newRow = max(0, sourceRow + rowOffset)
+        let newIndex = min(plan.sortedImages.count - 1, max(0, newRow * GridConstants.columns + newCol))
 
-        if newIndex != dragTargetIndex && newIndex != currentIndex {
+        // Only update target index for visual feedback - don't move the array yet
+        if newIndex != dragTargetIndex {
             dragTargetIndex = newIndex
-            moveImage(from: currentIndex, to: newIndex)
             HapticService.selection()
         }
     }
 
     private func handleDragEnd() {
-        draggedImageID = nil
-        dragTargetIndex = nil
+        defer {
+            draggedImageID = nil
+            dragTargetIndex = nil
+            dragSourceIndex = nil
+        }
+
+        // Perform the actual move only on drag end
+        guard let sourceIndex = dragSourceIndex,
+              let targetIndex = dragTargetIndex,
+              sourceIndex != targetIndex else {
+            plan.updatedAt = Date()
+            return
+        }
+
+        withAnimation(.smoothSpring) {
+            moveImage(from: sourceIndex, to: targetIndex)
+        }
         plan.updatedAt = Date()
     }
 
@@ -313,6 +434,16 @@ struct PlanEditorView: View {
         for (index, image) in plan.sortedImages.enumerated() {
             image.order = index
         }
+    }
+
+    private func hideImage(_ image: PlanImage) {
+        withAnimation(.smoothSpring) {
+            image.isHidden = true
+            image.hiddenAt = Date()
+            reorderImages()
+        }
+        plan.updatedAt = Date()
+        HapticService.notification(.success)
     }
 }
 

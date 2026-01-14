@@ -36,19 +36,14 @@ struct ThumbnailGrid: View {
 
     @ViewBuilder
     private func thumbnailCell(at index: Int, width: CGFloat, height: CGFloat) -> some View {
-        if index < images.count, let url = images[index].fileURL {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let loadedImage):
-                    loadedImage
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                case .failure, .empty:
-                    Color.gridItemPlaceholder
-                @unknown default:
-                    Color.gridItemPlaceholder
-                }
-            }
+        if index < images.count {
+            let image = images[index]
+            CachedAsyncImage(
+                url: image.fileURL,
+                cacheKey: image.localPath,
+                useThumbnail: true
+            )
+            .aspectRatio(contentMode: .fill)
             .frame(width: width, height: height)
             .clipped()
         } else {

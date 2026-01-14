@@ -86,10 +86,12 @@ struct PhotoGridCell: View {
                 onHide: onHide,
                 onEditCrop: onEditCrop,
                 onDelete: onDelete,
-                previewProvider: { [image] in
-                    // Create a preview view controller using existing ImagePreviewView
-                    let previewView = ImagePreviewView(image: image)
-                    return UIHostingController(rootView: previewView)
+                previewProvider: { [image, aspectRatio] in
+                    // Create a preview with crop applied
+                    let previewView = ImagePreviewView(image: image, aspectRatio: aspectRatio)
+                    let hostingController = UIHostingController(rootView: previewView)
+                    hostingController.view.backgroundColor = .clear
+                    return hostingController
                 }
             )
         ) {

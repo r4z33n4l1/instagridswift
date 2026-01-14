@@ -7,10 +7,24 @@ import SwiftUI
 
 struct ImagePreviewView: View {
     let image: PlanImage
+    let aspectRatio: AspectRatio
 
-    private var imageAspectRatio: CGFloat {
-        guard image.height > 0 else { return 1.0 }
-        return CGFloat(image.width) / CGFloat(image.height)
+    // Computed preview size based on aspect ratio
+    private var previewSize: CGSize {
+        let maxWidth: CGFloat = 280
+        let maxHeight: CGFloat = 380
+
+        let targetRatio = aspectRatio.value
+
+        // Calculate size that fits within bounds while maintaining aspect ratio
+        let widthFromHeight = maxHeight * targetRatio
+        let heightFromWidth = maxWidth / targetRatio
+
+        if widthFromHeight <= maxWidth {
+            return CGSize(width: widthFromHeight, height: maxHeight)
+        } else {
+            return CGSize(width: maxWidth, height: heightFromWidth)
+        }
     }
 
     var body: some View {
@@ -19,14 +33,21 @@ struct ImagePreviewView: View {
             cacheKey: image.localPath,
             useThumbnail: false // Full quality for preview
         )
-        .aspectRatio(imageAspectRatio, contentMode: .fit)
-        .frame(maxWidth: 300, maxHeight: 400)
+        .aspectRatio(contentMode: .fill)
+        .frame(width: previewSize.width, height: previewSize.height)
+        .modifier(CropAppliedModifier(
+            cropSettings: image.cropSettings(for: aspectRatio),
+            frameSize: previewSize,
+            imageWidth: image.width,
+            imageHeight: image.height
+        ))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
 #Preview {
     ImagePreviewView(
-        image: PlanImage(localPath: "", width: 1080, height: 1350, order: 0)
+        image: PlanImage(localPath: "", width: 1080, height: 1350, order: 0),
+        aspectRatio: .feedPortrait
     )
 }

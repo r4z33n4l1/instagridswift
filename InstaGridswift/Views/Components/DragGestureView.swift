@@ -54,8 +54,17 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
 
     func makeUIView(context: Context) -> DragHostView {
         let hostView = DragHostView()
+        hostView.backgroundColor = .clear
+        hostView.isOpaque = false
+
         let hostController = UIHostingController(rootView: content)
         hostController.view.backgroundColor = .clear
+        hostController.view.isOpaque = false
+
+        // Remove any system background
+        if #available(iOS 16.0, *) {
+            hostController.sizingOptions = .intrinsicContentSize
+        }
 
         hostView.addSubview(hostController.view)
         hostController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -68,13 +77,14 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
 
         hostView.hostController = hostController
 
-        // Set up drag gesture
+        // Set up drag gesture with higher priority
         let dragGesture = DragGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleDrag(_:))
         )
         dragGesture.dragDelegate = context.coordinator
         context.coordinator.dragGesture = dragGesture
+        context.coordinator.hostView = hostView
         hostView.addGestureRecognizer(dragGesture)
 
         // Set up context menu if configured
@@ -95,6 +105,7 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
 
         if let hostController = uiView.hostController as? UIHostingController<Content> {
             hostController.rootView = content
+            hostController.view.backgroundColor = .clear
         }
     }
 
@@ -115,10 +126,14 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
 
         weak var dragGesture: DragGestureRecognizer?
         weak var contextMenuInteraction: UIContextMenuInteraction?
+        weak var hostView: DragHostView?
 
         private var initialLocationInWindow: CGPoint = .zero
         private var isDragging: Bool = false
-        private let dragThreshold: CGFloat = 8
+        private var isContextMenuActive: Bool = false  // True when context menu is preparing or visible
+        private var hasMovedBeyondThreshold: Bool = false  // Track if user moved enough to drag
+        private var gestureStartTime: Date?
+        private let dragThreshold: CGFloat = 8  // Movement threshold to switch from menu to drag
 
         private weak var parentScrollView: UIScrollView?
         private var autoScrollTimer: Timer?
@@ -147,6 +162,8 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
             case .began:
                 initialLocationInWindow = locationInWindow
                 isDragging = false
+                hasMovedBeyondThreshold = false
+                gestureStartTime = Date()
                 parentScrollView = findScrollView(from: view)
 
             case .changed:
@@ -158,7 +175,18 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
                 let distance = sqrt(translation.width * translation.width + translation.height * translation.height)
 
                 if !isDragging && distance > dragThreshold {
+                    hasMovedBeyondThreshold = true
                     isDragging = true
+
+                    // Dismiss context menu if it's preparing or showing
+                    if isContextMenuActive, let interaction = contextMenuInteraction {
+                        // Dismiss asynchronously to avoid gesture conflicts
+                        DispatchQueue.main.async {
+                            interaction.dismissMenu()
+                        }
+                        isContextMenuActive = false
+                    }
+
                     parentScrollView?.isScrollEnabled = false
                     HapticService.impact(.medium)
                     onDragStarted()
@@ -182,6 +210,8 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
                 parentScrollView = nil
                 stopAutoScroll()
                 isDragging = false
+                hasMovedBeyondThreshold = false
+                gestureStartTime = nil
 
             default:
                 break
@@ -273,9 +303,9 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
         }
 
         func shouldRecognizeSimultaneouslyWith(_ otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            // Allow context menu's gestures to work simultaneously initially
-            if otherGestureRecognizer.name == "_UIContextMenuGestureRecognizer" ||
-               String(describing: type(of: otherGestureRecognizer)).contains("ContextMenu") {
+            // Allow context menu's gestures to work simultaneously until we start dragging
+            let gestureType = String(describing: type(of: otherGestureRecognizer))
+            if gestureType.contains("ContextMenu") || gestureType.contains("UILongPress") {
                 return !isDragging
             }
             return false
@@ -299,8 +329,11 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
             _ interaction: UIContextMenuInteraction,
             configurationForMenuAtLocation location: CGPoint
         ) -> UIContextMenuConfiguration? {
-            // Don't show context menu if dragging
-            guard !isDragging, let config = contextMenuConfig else { return nil }
+            // Don't show context menu if already dragging or moved beyond threshold
+            guard !isDragging, !hasMovedBeyondThreshold, let config = contextMenuConfig else { return nil }
+
+            // Mark that context menu is starting to prepare
+            isContextMenuActive = true
 
             return UIContextMenuConfiguration(
                 identifier: nil,
@@ -342,10 +375,42 @@ struct DragGestureView<Content: View>: UIViewRepresentable {
 
         func contextMenuInteraction(
             _ interaction: UIContextMenuInteraction,
+            willDisplayMenuFor configuration: UIContextMenuConfiguration,
+            animator: (any UIContextMenuInteractionAnimating)?
+        ) {
+            isContextMenuActive = true
+        }
+
+        func contextMenuInteraction(
+            _ interaction: UIContextMenuInteraction,
+            willEndFor configuration: UIContextMenuConfiguration,
+            animator: (any UIContextMenuInteractionAnimating)?
+        ) {
+            isContextMenuActive = false
+        }
+
+        // Called when the preview is about to be shown (during wind-up animation)
+        func contextMenuInteraction(
+            _ interaction: UIContextMenuInteraction,
+            previewForHighlightingMenuWithConfiguration configuration: UIContextMenuConfiguration
+        ) -> UITargetedPreview? {
+            // If we started dragging during preparation, dismiss and return nil
+            if isDragging || hasMovedBeyondThreshold {
+                DispatchQueue.main.async {
+                    interaction.dismissMenu()
+                }
+                return nil
+            }
+            // Return nil to use the default view as preview source
+            return nil
+        }
+
+        func contextMenuInteraction(
+            _ interaction: UIContextMenuInteraction,
             willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
             animator: any UIContextMenuInteractionCommitAnimating
         ) {
-            // Optional: Handle tap on preview
+            // Handle tap on preview if needed
         }
     }
 }
@@ -358,10 +423,18 @@ class DragHostView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
+        isOpaque = false
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        backgroundColor = .clear
+        isOpaque = false
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // Ensure no system backgrounds sneak in
         backgroundColor = .clear
     }
 }
@@ -379,7 +452,7 @@ class DragGestureRecognizer: UILongPressGestureRecognizer, UIGestureRecognizerDe
     override init(target: Any?, action: Selector?) {
         super.init(target: target, action: action)
 
-        self.minimumPressDuration = 0.15  // Short - we detect drag vs menu by movement
+        self.minimumPressDuration = 0.2  // Start tracking early to catch movement before context menu
         self.allowableMovement = .greatestFiniteMagnitude
         self.delegate = self
         self.cancelsTouchesInView = false

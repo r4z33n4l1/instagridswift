@@ -10,9 +10,12 @@ import SwiftData
 
 @main
 struct InstaGridswiftApp: App {
+    @State private var showLaunchScreen = true
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Plan.self,
+            PlanImage.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -25,7 +28,19 @@ struct InstaGridswiftApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                if showLaunchScreen {
+                    LaunchScreenView()
+                } else {
+                    PlansListView()
+                }
+            }
+            .animation(.easeOut(duration: 0.4), value: showLaunchScreen)
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    showLaunchScreen = false
+                }
+            }
         }
         .modelContainer(sharedModelContainer)
     }
